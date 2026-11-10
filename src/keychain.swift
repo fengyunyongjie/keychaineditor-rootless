@@ -137,3 +137,28 @@ func deleteKeychainItem(at secClass: String = kSecClassGenericPassword as String
     let status: OSStatus = SecItemDelete(query as CFDictionary)
     return status
 }
+
+func countKeychainItemsInGroup(agroup: String) -> Int? {
+    let query: [CFString: Any] = [
+        kSecClass             :   kSecClassGenericPassword,
+        kSecAttrAccessGroup   :   agroup as CFString,
+        kSecMatchLimit        :   kSecMatchLimitAll,
+        kSecReturnAttributes  :   true
+    ]
+    var result: AnyObject? = nil
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    if status == errSecItemNotFound { return 0 }
+    guard status == errSecSuccess else { return nil }
+    if let items = result as? [Any] { return items.count }
+    if result is Dictionary<String, Any> { return 1 }
+    return nil
+}
+
+func deleteAllKeychainItemsInGroup(agroup: String) -> OSStatus {
+    // SecItemDelete rejects kSecMatchLimit; match limit only applies to copy queries.
+    let query: [CFString: Any] = [
+        kSecClass             :   kSecClassGenericPassword,
+        kSecAttrAccessGroup   :   agroup as CFString
+    ]
+    return SecItemDelete(query as CFDictionary)
+}

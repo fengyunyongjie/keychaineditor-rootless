@@ -141,6 +141,23 @@ The suite passed 108 checks with private APIs available and 101 checks with them
 
 **Attention:** running without arguments attempts to dump all accessible Generic Password items. `-f` filters the result after querying Keychain, not the query itself. Do not use production secrets for validation.
 
+## Deleting items
+
+Delete one item, uniquely identified by account and service (add `--agroup` when the same pair exists in several groups):
+
+```
+keychaineditor -d --account "adjust_uuid" --service "deviceInfo" --agroup "N5GGUUB3U6.in.pocketful.ios"
+```
+
+Delete every visible item in an access group with `-dg`. Because this is destructive, it requires the confirmation flag, and the Foundation argument parser registers flags only when they carry a value, so the required form is `--yes 1` (a bare `--yes` is ignored and triggers the preview):
+
+```
+keychaineditor -dg --agroup "2MF2YLGLKJ.io.cex.app"            # preview only, exits 1
+keychaineditor -dg --agroup "2MF2YLGLKJ.io.cex.app" --yes 1    # deletes, then re-queries
+```
+
+The preview lists each item's account and service before refusal. After `--yes 1`, the tool deletes with a class + access-group query (`SecItemDelete` rejects `kSecMatchLimit`) and re-queries the group; it reports success only when the group is empty. Items in slices rejected by the platform (for example `-25293` on iOS 18) may remain; the re-query catches that and exits 1 with a warning.
+
 ### Known iOS 18 limitation: silent empty query results
 
 On a jailbroken iOS 18.7.10 iPad with a Procursus rootless bootstrap, extensive on-device probing found that the tool's queries return success (0) with a nil result for every query shape, even after the same process successfully writes and deletes an item, and even with an explicit access group. Direct database inspection confirms the device's keychain contains thousands of items across roughly 90 access groups, including items in the queried group. `SecTaskCopyValueForEntitlement` shows the wildcard `keychain-access-groups = ["*"]` entitlement is visible to securityd, but securityd silently returns no data instead of expanding the wildcard or returning an error. An ad-hoc binary without the entitlement correctly fails with `-34018`, so entitlements are being enforced; the wildcard expansion itself is what fails silently. Restarting securityd did not change this behavior.

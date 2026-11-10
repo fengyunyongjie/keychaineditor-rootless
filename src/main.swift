@@ -1,12 +1,13 @@
 import Foundation
 
-func printUsage() {
+func printUsage() -> Never {
     print("USAGE: \(CommandLine.arguments[0]) [commands]")
     print("Commands Description")
     print("  -v     version")
     print("  -f     Search. Requires a query string as the second argument.")
     print("  -e     Edit. Requires --account STRING --service STRING [--agroup STRING] --data STRING")
     print("  -d     Delete. Requires --account STRING --service STRING [--agroup STRING]")
+    print("  -dg    Delete ALL items in an access group. Requires --agroup STRING --yes. Destructive!")
     print("NOTES:")
     print(" * Account and Service names are used to uniquely identify a item. An optional AccessGroup can also be passed to identify the item.")
     print(" * If there is no Account name pass an empty string.")
@@ -45,6 +46,49 @@ func handleDelete(args: UserDefaults) {
     }
 }
 
+func handleDeleteGroup(args: UserDefaults) {
+    guard let agroup = args.string(forKey: "-agroup") else {
+        printUsage()  // exits
+    }
+    guard args.bool(forKey: "-yes") else {
+        // The Foundation argument parser only registers flags with a value
+        // (`--yes 1`); a bare `--yes` is invisible, so --yes 1 is the required form.
+        FileHandle.standardError.write(Data("Refusing to delete without --yes. Preview first:\n".utf8))
+        let preview = dumpKeychainItems()
+        let items = preview.items.filter { $0["Access Group"] == agroup }
+        if items.isEmpty {
+            FileHandle.standardError.write(Data("No visible items in access group '\(agroup)'.\n".utf8))
+        } else {
+            FileHandle.standardError.write(Data("\(items.count) item(s) in access group '\(agroup)':\n".utf8))
+            for item in items {
+                FileHandle.standardError.write(Data("  Account: \(item["Account"] ?? "?") | Service: \(item["Service"] ?? "?")\n".utf8))
+            }
+        }
+        for message in preview.diagnostics {
+            FileHandle.standardError.write(Data("KeychainEditor: \(message)\n".utf8))
+        }
+        exit(EXIT_FAILURE)
+    }
+
+    let count = countKeychainItemsInGroup(agroup: agroup)
+    if count == nil {
+        FileHandle.standardError.write(Data("KeychainEditor: Cannot verify access group '\(agroup)' before deletion.\n".utf8))
+        exit(EXIT_FAILURE)
+    }
+
+    let status = deleteAllKeychainItemsInGroup(agroup: agroup)
+    print(errorMessage(for: status))
+    if status == errSecSuccess {
+        let remaining = countKeychainItemsInGroup(agroup: agroup)
+        if remaining == 0 {
+            print("Verified: access group '\(agroup)' is now empty.")
+        } else {
+            FileHandle.standardError.write(Data("KeychainEditor: Warning: \(remaining ?? -1) item(s) remain in '\(agroup)' after deletion.\n".utf8))
+            exit(EXIT_FAILURE)
+        }
+    }
+}
+
 /*
   Start of Program.
 */
@@ -58,6 +102,7 @@ case "-v": print("KeychainEditor Version = 2.2")
 case "-f": handleSearch(args: UserDefaults.standard)
 case "-e": handleEdit(args: UserDefaults.standard)
 case "-d": handleDelete(args: UserDefaults.standard)
+case "-dg": handleDeleteGroup(args: UserDefaults.standard)
 case "-h": printUsage()
 default: printUsage()
 }

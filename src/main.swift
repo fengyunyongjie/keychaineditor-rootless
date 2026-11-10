@@ -21,8 +21,7 @@ func printUsage() {
 
 func handleSearch(args: UserDefaults) {
     if let query = args.string(forKey: "f") {
-        let items = search(for: query, in: dumpKeychainItems())
-        print(convertToJSON(for: items))
+        exit(outputKeychainDump(result: dumpKeychainItems(), filter: query))
     } else {
         printUsage()
     }
@@ -51,8 +50,7 @@ func handleDelete(args: UserDefaults) {
 */
 
 guard CommandLine.arguments.count >= 2 else {
-    print(convertToJSON(for: dumpKeychainItems()))
-    exit(EXIT_SUCCESS)
+    exit(outputKeychainDump(result: dumpKeychainItems()))
 }
 
 switch CommandLine.arguments[1] {

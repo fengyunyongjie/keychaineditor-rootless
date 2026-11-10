@@ -8,8 +8,6 @@ func errorMessage(for status: OSStatus) -> String {
         return "Item not found."
     case errSecInteractionNotAllowed:
         return "Device locked. Item unavailable."
-    case errSecItemNotFound:
-        return "The specified item could not be found in the keychain."
     case errSecAuthFailed:
         return "Authentication/Authorization failed."
     case errSecParam:
@@ -25,71 +23,91 @@ func errorMessage(for status: OSStatus) -> String {
     }
 }
 
-func decodeSecAccessControl(sacObj: Any?) -> String {
-
-    var finalDecodedValue: String = String()
-
-    // If there is no SecAccessControl object you will get a nil.
-    // usually, happens when device does not support it or An item is not added
-    // with SecAccessControl.
-    if let unwrappedSACObj = sacObj {
-      // iOS 8 behaves a bit differently. The SAC object is returned even though
-      // the device does not support it. SAC contains the AccessibilityConstant.
-      // Guess it has been refined in iOS9, where SAC only contains any value
-      // if the device supports it.
-      // Secondary check to make sure that we have something in SAC.
-        if let operations = getOperations(unwrappedSACObj as! SecAccessControl)?.takeUnretainedValue() as? Dictionary<String, Any> {
-            for eachOperation in operations.keys {
-                switch eachOperation {
-                case "dacl": return "Default ACL"
-                case "od":
-                    let constraints = operations["od"] as! Dictionary<String, AnyObject>
-                    for eachConstraint in constraints.keys {
-                        switch eachConstraint {
-                        case "cpo": finalDecodedValue += " UserPresence "
-                        case "cup": finalDecodedValue += " DevicePasscode "
-                        case "pkofn": finalDecodedValue += (constraints["pkofn"] as! Int == 1 ? " Or " : " And ")
-                        case "cbio": finalDecodedValue += ((constraints["cbio"]?.count)! == 1 ? " TouchIDAny " : " TouchIDCurrentSet ")
-                        default: break
-                        }
-                    }
-                case "osgn":
-                    finalDecodedValue += "PrivateKeyUsage "
-                    let constraints = operations["od"] as! Dictionary<String, AnyObject>
-                    for eachConstraint in constraints.keys {
-                        switch eachConstraint {
-                        case "cpo": finalDecodedValue += " UserPresence "
-                        case "cup": finalDecodedValue += " DevicePasscode "
-                        case "pkofn": finalDecodedValue += (constraints["pkofn"] as! Int == 1 ? " Or " : " And ")
-                        case "cbio": finalDecodedValue += ((constraints["cbio"]?.count)! == 1 ? " TouchIDAny " : " TouchIDCurrentSet ")
-                        default: break
-                        }
-                    }
-                case "prp": finalDecodedValue += "ApplicationPassword"
-                default: break
-                }
+func decodeAccessConstraints(value: Any) -> [String] {
+    if let boolean = value as? NSNumber, CFGetTypeID(boolean) == CFBooleanGetTypeID() {
+        return boolean.boolValue ? [] : ["Denied"]
+    }
+    guard let constraints = value as? Dictionary<String, Any> else {
+        return ["Unknown constraint"]
+    }
+    var decoded = [String]()
+    for key in constraints.keys.sorted() {
+        switch key {
+        case "cpo": decoded.append("UserPresence")
+        case "cup": decoded.append("DevicePasscode")
+        case "pkofn":
+            if let count = constraints[key] as? NSNumber,
+               CFGetTypeID(count) != CFBooleanGetTypeID(), count.doubleValue.isFinite,
+               count.doubleValue > 0, count.doubleValue.rounded(.towardZero) == count.doubleValue {
+                decoded.append(count.doubleValue == 1 ? "Or" : "And")
+            } else {
+                decoded.append("Unknown constraint")
             }
-            return finalDecodedValue
+        case "cbio":
+            if let biometric = constraints[key] as? Dictionary<String, Any> {
+                if biometric.count == 1 {
+                    decoded.append("BiometryAny")
+                } else if biometric.count == 2 {
+                    decoded.append("BiometryCurrentSet")
+                } else {
+                    decoded.append("Biometry (unknown constraint)")
+                }
+            } else {
+                decoded.append("Biometry (unknown constraint)")
+            }
+        default: decoded.append("Unknown constraint")
         }
     }
-    return "Not Applicable"
+    return decoded
 }
 
-func determineTypeAndReturnString(value: Any?) -> String {
-
-    if let unwrappedValue = value {
-        if unwrappedValue is Data {
-            if let unwrappedString = String(data: (unwrappedValue as! Data), encoding: String.Encoding.utf8) {
-                return unwrappedString
-            } else {
-                return "[Warning] Encoding Shenanigans. Cannot Decode Data. Here is the Hex String: " + (unwrappedValue as! Data).map { String(format: "%02x", $0) }.joined()
-            }
-        } else if unwrappedValue is NSDate {
-            let dateFMT = DateFormatter()
-            dateFMT.dateFormat = "MMM dd, yyyy, hh:mm:ss zzz"
-            return dateFMT.string(from: unwrappedValue as! Date)
+func decodeAccessOperations(operations: Dictionary<String, Any>, requiresPassword: Bool = false) -> String {
+    var decoded = [String]()
+    for operation in operations.keys.sorted() {
+        guard let value = operations[operation] else { continue }
+        switch operation {
+        case "dacl": decoded.append("Default ACL")
+        case "od": decoded.append(contentsOf: decodeAccessConstraints(value: value))
+        case "osgn":
+            decoded.append("PrivateKeyUsage")
+            decoded.append(contentsOf: decodeAccessConstraints(value: value))
+        case "prp": decoded.append("ApplicationPassword")
+        default: decoded.append("Unknown operation")
         }
-        switch (unwrappedValue as! String) {
+    }
+    if requiresPassword && !decoded.contains("ApplicationPassword") {
+        decoded.append("ApplicationPassword")
+    }
+    return decoded.isEmpty ? "No constraints" : decoded.joined(separator: " ")
+}
+
+func decodeSecAccessControl(sacObj: Any?) -> String {
+    guard let sacObj = sacObj else { return "Not Applicable" }
+    let accessControl = sacObj as AnyObject
+    // Private API availability is checked by the C wrapper; never read object memory.
+    guard accessControlOperationsAvailable() else { return "Unavailable (AccessControl API)" }
+    let requiresPassword = accessControlRequiresPassword(accessControl)
+    guard let operations = getOperations(accessControl)?.takeUnretainedValue() as? Dictionary<String, Any> else {
+        return requiresPassword ? "ApplicationPassword" : "Unavailable (AccessControl constraints)"
+    }
+    return decodeAccessOperations(operations: operations, requiresPassword: requiresPassword)
+}
+
+func determineTypeAndReturnString(value: Any?, accessibility: Bool = false) -> String {
+    guard let value = value, !(value is NSNull) else { return "" }
+    if let data = value as? Data {
+        if let string = String(data: data, encoding: String.Encoding.utf8) { return string }
+        return "[Warning] Encoding Shenanigans. Cannot Decode Data. Here is the Hex String: "
+            + data.map { String(format: "%02x", $0) }.joined()
+    }
+    if let date = value as? Date {
+        let dateFMT = DateFormatter()
+        dateFMT.dateFormat = "MMM dd, yyyy, hh:mm:ss zzz"
+        return dateFMT.string(from: date)
+    }
+    if let string = value as? String {
+        guard accessibility else { return string }
+        switch string {
         case "ak": return "kSecAttrAccessibleWhenUnlocked"
         case "ck": return "kSecAttrAccessibleAfterFirstUnlock"
         case "dk": return "kSecAttrAccessibleAlways"
@@ -97,12 +115,14 @@ func determineTypeAndReturnString(value: Any?) -> String {
         case "cku": return "kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly"
         case "dku": return "kSecAttrAccessibleAlwaysThisDeviceOnly"
         case "akpu": return "kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly"
-        case "": return ""
-        default: return (unwrappedValue as! String)
+        default: return string
         }
-    } else {
-        return ""
     }
+    if let number = value as? NSNumber {
+        if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+        return number.stringValue
+    }
+    return String(describing: value)
 }
 
 func canonicalizeTypesInReturnedDicts(items: [Dictionary<String, Any>]) -> [Dictionary<String, String>] {
@@ -116,7 +136,7 @@ func canonicalizeTypesInReturnedDicts(items: [Dictionary<String, Any>]) -> [Dict
         dict["Access Group"] = determineTypeAndReturnString(value: eachDict[kSecAttrAccessGroup as String])
         dict["Creation Time"] = determineTypeAndReturnString(value: eachDict[kSecAttrCreationDate as String])
         dict["Modification Time"] = determineTypeAndReturnString(value: eachDict[kSecAttrModificationDate as String])
-        dict["Protection"] = determineTypeAndReturnString(value: eachDict[kSecAttrAccessible as String])
+        dict["Protection"] = determineTypeAndReturnString(value: eachDict[kSecAttrAccessible as String], accessibility: true)
         dict["Data"] = determineTypeAndReturnString(value: eachDict[kSecValueData as String])
         dict["AccessControl"] = decodeSecAccessControl(sacObj: eachDict[kSecAttrAccessControl as String])
 
@@ -139,17 +159,37 @@ func search(for query: String, in items: [Dictionary<String, String>]) -> [Dicti
     return finalItems
 }
 
-func convertToJSON(for items: [Dictionary<String, String>]) -> String {
-    do {
-        let jsonData = try JSONSerialization.data(withJSONObject: items, options: JSONSerialization.WritingOptions.prettyPrinted)
-        guard let jsonString = String(data: jsonData, encoding: String.Encoding.utf8) else {
-            NSLog("convertToJSON() -> Error converting keychain dump to JSON.")
-            exit(EXIT_FAILURE)
-        }
-        return jsonString
-    } catch let error as NSError {
-        return "Error: \(error.domain)"
+func convertToJSON(for items: [Dictionary<String, String>]) throws -> String {
+    let jsonData = try JSONSerialization.data(withJSONObject: items, options: JSONSerialization.WritingOptions.prettyPrinted)
+    guard let jsonString = String(data: jsonData, encoding: String.Encoding.utf8) else {
+        throw NSError(domain: "KeychainEditor.JSON", code: 1, userInfo: nil)
     }
+    return jsonString
+}
+
+func writeDiagnostic(_ message: String) {
+    FileHandle.standardError.write(Data(("KeychainEditor: " + message + "\n").utf8))
+}
+
+func writeJSONOutput(_ json: String) throws {
+    let written = json.withCString { fputs($0, stdout) >= 0 }
+    guard written, fputc(10, stdout) != EOF, fflush(stdout) == 0 else {
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil)
+    }
+}
+
+func outputKeychainDump(result: KeychainDumpResult, filter: String? = nil,
+                       output: (String) throws -> Void = { try writeJSONOutput($0) },
+                       diagnose: (String) -> Void = { writeDiagnostic($0) }) -> Int32 {
+    for message in result.diagnostics { diagnose(message) }
+    let items = filter.map { search(for: $0, in: result.items) } ?? result.items
+    do {
+        try output(try convertToJSON(for: items))
+    } catch {
+        diagnose("JSON serialization or output failed.")
+        return EXIT_FAILURE
+    }
+    return result.diagnostics.isEmpty ? EXIT_SUCCESS : EXIT_FAILURE
 }
 
 func decodeIfBase64(for userData: String) -> String {

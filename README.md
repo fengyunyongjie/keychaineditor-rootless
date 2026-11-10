@@ -50,27 +50,123 @@ EXAMPLES:
 
 ## Installation
 
-Recommended approach is to install using the `dpkg` command. SCP the .deb file into the device and run the following command:
+Choose the package matching the device's jailbreak layout. Copy the `.deb` file to an authorized test device and install with `dpkg`:
 
-`dpkg -i keychaineditor.deb`
+| Layout | Package | Executable |
+| --- | --- | --- |
+| Rootful (legacy) | `keychaineditor.deb` | `/usr/local/bin/keychaineditor` |
+| Rootless (iOS 15+) | `keychaineditor-rootless.deb` | `/var/jb/usr/bin/keychaineditor` |
 
-To Un-install:
+For rootless, run as root in the device's bootstrap environment:
+
+```
+dpkg -i keychaineditor-rootless.deb
+/var/jb/usr/bin/keychaineditor -v
+/var/jb/usr/bin/keychaineditor -h
+```
+
+The help command currently exits with status 1. Use the full executable path if `/var/jb/usr/bin` is not in `PATH`.
+
+For rootful, use `dpkg -i keychaineditor.deb`. Both packages have the same package identifier and are alternatives, not intended to be installed together.
+
+To uninstall either package:
 
 `dpkg -r com.nitin.keychaineditor`
 
-*Note:* For manual installation, iOS devices do not come with Swift Runtime dylibs. You need to manually copy them to the device with the binary. The required frameworks are included in the repository.
+*Note:* The rootless build uses the system Swift runtime provided by modern iOS and does not bundle Swift dylibs. Legacy rootful builds copy the matching old toolchain's Swift runtime into the package; do not reuse those old dylibs for a modern rootless build.
 
 ## Build Notes
 
-To build the tool, Run 'make' in the current directory. The final outcome will be a `.deb` package.
+### Rootless
 
-*Note:* You should have xcode command line tools installed for the toolchain.
+Requires a full Xcode installation with an iPhoneOS SDK (not just Command Line Tools), `make`, `ldid`, `dpkg-deb` with `--root-owner-group` support, and Python 3. Select the Xcode developer directory with `xcode-select` if needed. `ldid` and `dpkg` can be installed via Homebrew.
 
-*Note:* You should also have `ldid` and `dpkg-deb` (can be instaled via Homebrew).
+```
+make PACKAGE_SCHEME=rootless
+make PACKAGE_SCHEME=rootless verify
+```
 
-The tool is currently only built for 64-bit architectures. However, it is very easy to build for 32-bit arch as well. Just modify the `ARCH_FLAGS` and `TARGET` in Makefile with corresponding 32-bit arch values.
+`make THEOS_PACKAGE_SCHEME=rootless` is also accepted for convenience; this remains a standalone Makefile and does not require Theos. An explicit `PACKAGE_SCHEME` takes precedence. Parallel builds (`make -j4 PACKAGE_SCHEME=rootless verify`) are supported.
+
+The rootless build targets arm64 and iOS 15.0 by default. It compiles with `swiftc`, signs using the existing `src/entitlements.xml`, and stages only the executable under `build/rootless/<configuration>/package/var/jb/usr/bin`. The configuration directory is keyed by deployment target, SDK path, and compiler paths so changing them cannot silently reuse incompatible objects. Packaging runs on each invocation to select the current configuration. Package metadata is generated from the existing control file with `Architecture: iphoneos-arm64`. The original rootful package and layout are not overwritten.
+
+The `verify` target checks package layout, architecture, root ownership, executable permissions, Mach-O deployment version, system library/rpath dependencies, and the embedded Keychain entitlement. It is a static check: it neither runs the iOS executable nor accesses Keychain data. Entitlement extraction does not prove signature integrity or acceptance by the device's signing policy.
+
+To remove only rootless build output:
+
+`make PACKAGE_SCHEME=rootless clean`
+
+### Rootful (legacy)
+
+`make` (or `make PACKAGE_SCHEME=rootful`) retains the original iOS 9 / arm64 build and produces `keychaineditor.deb`. This path expects an older Xcode/Swift toolchain with the bundled Swift dylibs used by the original build; it is not a modern-Xcode compatibility guarantee. Testing this legacy path with Xcode 16.2 failed at `copylibs` because that toolchain no longer contains the expected old Swift dylibs.
+
+Legacy 32-bit builds require a compatible old toolchain and SDK, with both `ARCH_FLAGS` and `TARGET` changed in the rootful section:
 
 ```
 ARCH_FLAGS      =  -arch armv7s
 TARGET          =  -target armv7s-apple-ios9
 ```
+
+### Compatibility and device validation
+
+The rootless package is intended for iOS 15+ jailbreak bootstraps using `/var/jb` and `iphoneos-arm64` packages. An arm64 command-line executable does not require an arm64e slice just because the device has an arm64e CPU. Layout compatibility does not imply compatibility with every bootstrap's signing and securityd policies.
+
+The rootless build and static package checks have been tested with Xcode 16.2 / iPhoneOS SDK 18.2. A device smoke test on an iPad7,11 running iOS 18.7.10 with a Procursus `/var/jb` bootstrap passed: the package was unpacked into an isolated bootstrap temporary directory, `-v` printed version 2.2 and exited 0, and `-h` displayed help and exited 1 as expected. No package was installed and no real Keychain data was queried or modified during these tests. The source still produces warnings for deprecated accessibility constants; unsafe result casts and optional return-flag bridging have been removed.
+
+On an authorized, isolated test device, first verify `-v` and `-h` to check executable loading, then validate only non-sensitive test items created by a test app. Check unlocked/locked behavior, access groups, and AccessControl-protected items. The existing wildcard Keychain entitlement must be honored by the jailbreak; root privileges alone do not guarantee cross-app access.
+
+The AccessControl decoder no longer reads a private `SecAccessControl` memory layout. It optionally resolves `SecAccessControlGetConstraints` and `SecAccessControlGetRequirePassword`, validates object types, and safely reports `Unavailable` when the private API cannot be used. These are still private APIs: unknown operation/constraint formats are explicitly marked, and complete compatibility with all iOS versions is not guaranteed. Biometric constraints use `BiometryAny`/`BiometryCurrentSet` rather than assuming Touch ID hardware; those labels still depend on the known private constraint format.
+
+### Query errors and regression tests
+
+Queries accept a dictionary or an array of dictionaries without forced casts. A successful status with a nil result, unexpected result types, and mixed arrays are diagnosed instead of causing `trace trap`. Each query resets its result pointer. The return flags use boolean values that bridge to CFBoolean; regression tests inspect their actual CF types.
+
+For dump and `-f`, stdout contains JSON, diagnostics go to stderr without including item data, and exit status is 1 when any query fails or returns a malformed result. Valid partial items are preserved, but the result is incomplete. `errSecItemNotFound` is normal empty output and does not fail. Exit status 0 still does not establish cross-app entitlement coverage.
+
+Run the local synthetic regression suite:
+
+```
+make PACKAGE_SCHEME=rootless test
+```
+
+Build signed iOS regression executables, without uploading or running them automatically:
+
+```
+make PACKAGE_SCHEME=rootless test-device
+```
+
+They are created as `build/rootless/<configuration>/compatibility` and `compatibility-disabled`. Both use only injected synthetic queries and in-memory AccessControl objects: they do not call real Keychain queries, additions, updates, or deletions. The disabled variant simulates missing private APIs. `scripts/test-compatibility.py` also verifies synthetic dump/search JSON, stderr, and exit statuses.
+
+The suite passed 108 checks with private APIs available and 101 checks with them disabled, both on macOS and on the iOS 18.7.10 test iPad. It also checks malformed fractional ACL thresholds and output-write failure handling. In-memory objects covered no flags, UserPresence, DevicePasscode, BiometryAny, BiometryCurrentSet, ApplicationPassword, PrivateKeyUsage, and PrivateKeyUsage + DevicePasscode. ApplicationPassword now appears in the decoded output and PrivateKeyUsage no longer traps. Tests of nil and partial results returned status 1 with valid JSON; item-not-found returned status 0. These tests verify the compatibility boundaries, not actual protected Keychain item access or every private constraint format.
+
+**Attention:** running without arguments attempts to dump all accessible Generic Password items. `-f` filters the result after querying Keychain, not the query itself. Do not use production secrets for validation.
+
+### Known iOS 18 limitation: silent empty query results
+
+On a jailbroken iOS 18.7.10 iPad with a Procursus rootless bootstrap, extensive on-device probing found that the tool's queries return success (0) with a nil result for every query shape, even after the same process successfully writes and deletes an item, and even with an explicit access group. Direct database inspection confirms the device's keychain contains thousands of items across roughly 90 access groups, including items in the queried group. `SecTaskCopyValueForEntitlement` shows the wildcard `keychain-access-groups = ["*"]` entitlement is visible to securityd, but securityd silently returns no data instead of expanding the wildcard or returning an error. An ad-hoc binary without the entitlement correctly fails with `-34018`, so entitlements are being enforced; the wildcard expansion itself is what fails silently. Restarting securityd did not change this behavior.
+
+This is a securityd policy or platform-behavior change on iOS 18 that this tool's default entitlement strategy does not overcome. The observed behavior (write succeeds, every read returns success with no data) is consistent with securityd accepting the client but not expanding the wildcard entitlement to a concrete group list. Restarting securityd did not change this behavior. The tool reports these conditions on stderr with exit status 1 instead of crashing.
+
+### Workaround: concrete per-device entitlements (`ENTITLEMENTS=`)
+
+Signing the tool with a concrete `keychain-access-groups` list restores full query capability on iOS 18. On the test iPad, a build signed with explicit group strings (one per group present in the device keychain) read back 903 items across 69 groups, including all items of `N5GGUUB3U6.in.pocketful.ios`. A wildcard `["*"]` entitlement is treated differently from an explicit list even when the same groups are involved.
+
+Generate `src/entitlements-device.xml` from the device's actual access groups (root access to `/var/Keychains/keychain-2.db` is required to list them) and build with:
+
+```
+make PACKAGE_SCHEME=rootless ENTITLEMENTS=src/entitlements-device.xml verify
+```
+
+`ENTITLEMENTS` defaults to `src/entitlements.xml` for the portable wildcard build. Both builds are `iphoneos-arm64` and pass static verification; the concrete list is device-specific and does not transfer to other devices.
+
+### Refreshing device entitlements
+
+The concrete group list is a snapshot: apps installed or used later create new access groups that are not covered. Re-run the full refresh (re-export groups, rebuild, reinstall) with one command from the repository root on the Mac:
+
+```
+python3 scripts/refresh-device-entitlements.py
+```
+
+It uploads the read-only helper `scripts/device/kc-dump-groups-arm64` (lists access groups from the keychain database, without touching item data), regenerates `src/entitlements-device.xml`, rebuilds with verification, installs over `dpkg`, and prints `+`/`-` group diffs. Use `--skip-install` to rebuild without reinstalling and `--host <alias>` for a different SSH alias than `ipad`.
+
+Two residual limitations were observed on iOS 18.7.10. Queries restricted to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` return `-25293` (authorization failure) on this bootstrap, so that accessibility slice is skipped and reported on stderr; the other six slices return data. Four `com.apple.*` system groups return `-25300` even when explicitly signed into the entitlement list, and their items are excluded from the dump. The readable total (903 items across 69 groups) therefore differs from the raw database count (1187 genp rows).

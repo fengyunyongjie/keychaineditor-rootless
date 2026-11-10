@@ -32,14 +32,37 @@ func addKeychainItem() -> OSStatus {
     return status
 }
 
-func dumpKeychainItems() -> [Dictionary<String, String>] {
-    var returnedItemsInGenericArray: AnyObject? = nil
-    var finalArrayOfKeychainItems = [Dictionary<String, Any>]()
-    var returnedKeychainItems = [Dictionary<String, String>]()
-    var status: OSStatus = -1
+struct KeychainDumpResult {
+    let items: [Dictionary<String, String>]
+    let diagnostics: [String]
+}
 
-    let secClasses: [NSString] = [kSecClassGenericPassword]
-    let accessiblityConstants: [NSString] = [kSecAttrAccessibleAfterFirstUnlock,
+typealias KeychainQuery = (CFDictionary, inout AnyObject?) -> OSStatus
+
+func normalizeKeychainResult(value: Any?) -> (items: [Dictionary<String, Any>], hadErrors: Bool) {
+    guard let value = value else { return ([], true) }
+    if let item = value as? Dictionary<String, Any> {
+        return ([item], false)
+    }
+    guard let values = value as? [Any] else { return ([], true) }
+    var items = [Dictionary<String, Any>]()
+    var hadErrors = false
+    for value in values {
+        if let item = value as? Dictionary<String, Any> {
+            items.append(item)
+        } else {
+            hadErrors = true
+        }
+    }
+    return (items, hadErrors)
+}
+
+func dumpKeychainItems(queryItems: KeychainQuery = { query, result in
+    return SecItemCopyMatching(query, &result)
+}) -> KeychainDumpResult {
+    var finalArrayOfKeychainItems = [Dictionary<String, Any>]()
+    var diagnostics = [String]()
+    let accessiblityConstants: [CFString] = [kSecAttrAccessibleAfterFirstUnlock,
                                              kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
                                              kSecAttrAccessibleAlways,
                                              kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
@@ -47,35 +70,29 @@ func dumpKeychainItems() -> [Dictionary<String, String>] {
                                              kSecAttrAccessibleWhenUnlocked,
                                              kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
 
-    for eachKSecClass in secClasses {
-        for eachConstant in accessiblityConstants {
-            let query: [CFString: Any] = [
-                kSecClass             :   eachKSecClass,
-                kSecAttrAccessible    :   eachConstant,
-                kSecMatchLimit        :   kSecMatchLimitAll,
-                kSecReturnAttributes  :   kCFBooleanTrue,
-                kSecReturnData        :   kCFBooleanTrue
-                ]
-
-            status = SecItemCopyMatching(query as CFDictionary, &returnedItemsInGenericArray)
-
-            if status == errSecSuccess {
-                finalArrayOfKeychainItems =  finalArrayOfKeychainItems
-                    + (returnedItemsInGenericArray as! Array)
+    for eachConstant in accessiblityConstants {
+        let query: [CFString: Any] = [
+            kSecClass             :   kSecClassGenericPassword,
+            kSecAttrAccessible    :   eachConstant,
+            kSecMatchLimit        :   kSecMatchLimitAll,
+            kSecReturnAttributes  :   true,
+            kSecReturnData        :   true
+        ]
+        var returnedItems: AnyObject? = nil
+        let status = queryItems(query as CFDictionary, &returnedItems)
+        let context = "Generic Password / \(determineTypeAndReturnString(value: eachConstant, accessibility: true))"
+        if status == errSecSuccess {
+            let normalized = normalizeKeychainResult(value: returnedItems)
+            finalArrayOfKeychainItems.append(contentsOf: normalized.items)
+            if normalized.hadErrors {
+                diagnostics.append("\(context): Security API returned success (0) without a valid dictionary result; output may be incomplete.")
             }
+        } else if status != errSecItemNotFound {
+            diagnostics.append("\(context): OSStatus \(status): \(errorMessage(for: status))")
         }
     }
-
-    // The value of status is not really the actual status that I like to
-    // have. The status varies according to constant that I am dumping with.
-    // Hence, if the final array contains at least one value, then I will consider
-    // it as a success. Or else, just return the last status value.
-
-    if (finalArrayOfKeychainItems.count >= 1) {
-        status = errSecSuccess
-        returnedKeychainItems = canonicalizeTypesInReturnedDicts(items: finalArrayOfKeychainItems)
-    }
-    return returnedKeychainItems
+    return KeychainDumpResult(items: canonicalizeTypesInReturnedDicts(items: finalArrayOfKeychainItems),
+                              diagnostics: diagnostics)
 }
 
 func updateKeychainItem(at secClass: String = kSecClassGenericPassword as String,

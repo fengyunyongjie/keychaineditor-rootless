@@ -166,7 +166,7 @@ This is a securityd policy or platform-behavior change on iOS 18 that this tool'
 
 ### Workaround: concrete per-device entitlements (`ENTITLEMENTS=`)
 
-Signing the tool with a concrete `keychain-access-groups` list restores full query capability on iOS 18. On the test iPad, a build signed with explicit group strings (one per group present in the device keychain) read back 903 items across 69 groups, including all items of `N5GGUUB3U6.in.pocketful.ios`. A wildcard `["*"]` entitlement is treated differently from an explicit list even when the same groups are involved.
+Signing the tool with a concrete `keychain-access-groups` list restores full query capability on iOS 18. The concrete list is device-specific and must not be shared as a repository artifact because it can reveal the installed App set of a test device. Use the checked-in `src/entitlements-device.example.xml` as a shape reference; the Mac refresh script or the built-in `-r` command generates the real `src/entitlements-device.xml` locally.
 
 Generate `src/entitlements-device.xml` from the device's actual access groups (root access to `/var/Keychains/keychain-2.db` is required to list them) and build with:
 
@@ -184,7 +184,7 @@ The concrete group list is a snapshot: apps installed or used later create new a
 python3 scripts/refresh-device-entitlements.py
 ```
 
-It uploads the read-only helper `scripts/device/kc-dump-groups-arm64` (lists access groups from the keychain database, without touching item data), regenerates `src/entitlements-device.xml`, rebuilds with verification, installs over `dpkg`, and prints `+`/`-` group diffs. Use `--skip-install` to rebuild without reinstalling and `--host <alias>` for a different SSH alias than `ipad`.
+It uploads the read-only helper `scripts/device/kc-dump-groups-arm64` (lists access groups from the keychain database, without touching item data), regenerates the locally ignored `src/entitlements-device.xml`, rebuilds with verification, installs over `dpkg`, and prints `+`/`-` group diffs. Use `--skip-install` to rebuild without reinstalling and `--host <alias>` for a different SSH alias than `ipad`.
 
 On a device that already has the rootless binary installed, the same refresh can run entirely on the iPad. Install Procursus `ldid` once:
 
@@ -203,4 +203,4 @@ keychaineditor -r -f "io.new.app"
 
 This is intended for the installed rootless executable and does not produce a `.deb`. The Mac script remains useful for building and distributing a fresh package. `-r` is deliberately explicit; ordinary queries never re-sign the executable automatically.
 
-Two residual limitations were observed on iOS 18.7.10. Queries restricted to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` return `-25293` (authorization failure) on this bootstrap, so that accessibility slice is skipped and reported on stderr; the other six slices return data. Four `com.apple.*` system groups return `-25300` even when explicitly signed into the entitlement list, and their items are excluded from the dump. The readable total (903 items across 69 groups) therefore differs from the raw database count (1187 genp rows).
+Two residual limitations were observed during the iOS 18.7.10 device tests: queries restricted to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` returned `-25293` on that bootstrap, and some `com.apple.*` system groups returned `-25300`. These platform-specific slices are reported on stderr and may be excluded from a dump. The built-in `-r` refresh-only path was verified on the authorized iPad; a post-refresh query must use an access group present in the device's current database snapshot, because groups can disappear when apps are removed or their data changes.

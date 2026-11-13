@@ -2,5 +2,6 @@
 keychaineditor/usr/local/bin/keychaineditor
 *.dylib
 /build/
-/keychaineditor-rootless.deb
 /.zcode/
+/keychaineditor-rootless.deb
+/src/entitlements-device.xml

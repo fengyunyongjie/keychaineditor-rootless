@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
+#include "refreshKeychainGroups.h"
 
 /* Borrowed result; valid while access_control remains alive. */
 CFDictionaryRef getOperations(CFTypeRef access_control);

@@ -12,11 +12,9 @@ xcrun --sdk iphoneos clang \
   -target arm64-apple-ios15.0 \
   -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
   -framework Security -framework CoreFoundation \
-  /tmp/kc-dump-groups.c -o scripts/device/kc-dump-groups-arm64
+  scripts/device/kc-dump-groups.c -o scripts/device/kc-dump-groups-arm64
 ldid -S scripts/device/kc-dump-groups-arm64
 ```
 
-The source lives at `/tmp/kc-dump-groups.c` in the session that produced the
-binary; it is intentionally not committed because it is small and the committed
-binary is ad-hoc signed. Rebuild from the snippet in
-`scripts/refresh-device-entitlements.py` history if needed.
+The same database scan is compiled into the main `keychaineditor -r` command;
+this standalone helper remains for the Mac-side refresh script.

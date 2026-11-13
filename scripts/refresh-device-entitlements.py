@@ -21,6 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 ENTITLEMENTS = REPO / "src" / "entitlements-device.xml"
 EXPORT_TOOL = REPO / "scripts" / "device" / "kc-dump-groups-arm64"
+EXPORT_SOURCE = REPO / "scripts" / "device" / "kc-dump-groups.c"
 PLIST_HEADER = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -51,8 +52,8 @@ def main():
     parser.add_argument("--skip-install", action="store_true", help="build but do not reinstall")
     args = parser.parse_args()
 
-    if not EXPORT_TOOL.is_file():
-        sys.exit(f"Missing {EXPORT_TOOL}. Build it first (see scripts/device/README.md).")
+    if not EXPORT_TOOL.is_file() or not EXPORT_SOURCE.is_file():
+        sys.exit(f"Missing {EXPORT_TOOL} or {EXPORT_SOURCE}. Build the helper first (see scripts/device/README.md).")
 
     with tempfile.TemporaryDirectory(prefix="kc-refresh-") as tmp:
         tmp_path = Path(tmp)

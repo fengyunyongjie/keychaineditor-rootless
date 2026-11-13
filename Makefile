@@ -25,6 +25,7 @@ PACKAGE_BINARY  = $(STAGING_DIR)/var/jb/usr/bin/keychaineditor
 PACKAGE         = keychaineditor-rootless.deb
 ENTITLEMENTS    ?= src/entitlements.xml
 SOURCE          = $(wildcard src/*.swift)
+C_SOURCE        = $(wildcard src/*.c)
 HEADERS         = $(wildcard src/*.h)
 
 ## ROOTLESS BUILD AND PACKAGING ##
@@ -40,13 +41,16 @@ package: $(PACKAGE)
 $(BUILD_DIR):
 	mkdir -p "$@"
 
-$(BUILD_DIR)/decodeSecAccessControl.o: src/decodeSecAccessControl.c $(HEADERS) Makefile | $(BUILD_DIR)
+$(BUILD_DIR)/decodeSecAccessControl.o: src/decodeSecAccessControl.c $(C_SOURCE) $(HEADERS) Makefile | $(BUILD_DIR)
 	$(CLANG) -target $(TARGET) -isysroot "$(SDK_PATH)" -c "$<" -o "$@"
 
-$(BINARY): $(SOURCE) $(HEADERS) $(BUILD_DIR)/decodeSecAccessControl.o Makefile
+$(BUILD_DIR)/refreshKeychainGroups.o: src/refreshKeychainGroups.c $(HEADERS) Makefile | $(BUILD_DIR)
+	$(CLANG) -target $(TARGET) -isysroot "$(SDK_PATH)" -c "$<" -o "$@"
+
+$(BINARY): $(SOURCE) $(C_SOURCE) $(HEADERS) $(BUILD_DIR)/decodeSecAccessControl.o $(BUILD_DIR)/refreshKeychainGroups.o Makefile
 	$(SWIFT) -target $(TARGET) -sdk "$(SDK_PATH)" -O \
 		-import-objc-header src/bridgingheader.h $(SOURCE) \
-		$(BUILD_DIR)/decodeSecAccessControl.o -o "$@"
+		$(BUILD_DIR)/decodeSecAccessControl.o $(BUILD_DIR)/refreshKeychainGroups.o -o "$@"
 
 $(PACKAGE_BINARY): $(BINARY) $(ENTITLEMENTS) Makefile
 	mkdir -p "$(dir $@)"
@@ -73,7 +77,7 @@ HOST_SDK_PATH = $(shell xcrun --sdk macosx --show-sdk-path)
 $(HOST_TEST_DIR):
 	mkdir -p "$@"
 
-$(HOST_TEST_DIR)/decodeSecAccessControl.o: src/decodeSecAccessControl.c $(HEADERS) Makefile | $(HOST_TEST_DIR)
+$(HOST_TEST_DIR)/decodeSecAccessControl.o: src/decodeSecAccessControl.c $(C_SOURCE) $(HEADERS) Makefile | $(HOST_TEST_DIR)
 	$(CLANG) -isysroot "$(HOST_SDK_PATH)" -c "$<" -o "$@"
 
 $(HOST_TEST_DIR)/decodeSecAccessControl-disabled.o: src/decodeSecAccessControl.c $(HEADERS) Makefile | $(HOST_TEST_DIR)
@@ -137,12 +141,16 @@ LD_FLAGS  =  -syslibroot $(SDK_PATH) \
             -L $(TOOLCHAIN_PATH)
 
 SOURCE = $(notdir $(wildcard src/*.swift))
+C_SOURCE = $(notdir $(wildcard src/*.c))
 
 keychaineditor: compile link sign copylibs package removegarbage
 
-compile: decodeSecAccessControl.c $(SOURCE) main.swift
+compile: $(C_SOURCE) $(SOURCE) main.swift
 
 decodeSecAccessControl.c:
+	$(CLANG) $(CLANG_FLAGS) src/$@
+
+refreshKeychainGroups.c:
 	$(CLANG) $(CLANG_FLAGS) src/$@
 
 %.swift:

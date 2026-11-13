@@ -186,4 +186,21 @@ python3 scripts/refresh-device-entitlements.py
 
 It uploads the read-only helper `scripts/device/kc-dump-groups-arm64` (lists access groups from the keychain database, without touching item data), regenerates `src/entitlements-device.xml`, rebuilds with verification, installs over `dpkg`, and prints `+`/`-` group diffs. Use `--skip-install` to rebuild without reinstalling and `--host <alias>` for a different SSH alias than `ipad`.
 
+On a device that already has the rootless binary installed, the same refresh can run entirely on the iPad. Install Procursus `ldid` once:
+
+```
+apt install ldid
+```
+
+Then use the built-in short command:
+
+```
+keychaineditor -r
+keychaineditor -r -f "io.new.app"
+```
+
+`-r` reads only distinct `genp.agrp` values from `/var/Keychains/keychain-2.db`, generates a concrete entitlement plist, signs a temporary copy with `/var/jb/usr/bin/ldid` (or `/var/jb/usr/local/bin/ldid`), and atomically replaces the executable only after signing succeeds. With remaining arguments, it re-execs the new signed binary after removing `-r`; without remaining arguments it exits after reporting success. A missing `ldid`, empty group list, database failure, or signing failure leaves the existing executable untouched. The command requires root and does not read item data.
+
+This is intended for the installed rootless executable and does not produce a `.deb`. The Mac script remains useful for building and distributing a fresh package. `-r` is deliberately explicit; ordinary queries never re-sign the executable automatically.
+
 Two residual limitations were observed on iOS 18.7.10. Queries restricted to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` return `-25293` (authorization failure) on this bootstrap, so that accessibility slice is skipped and reported on stderr; the other six slices return data. Four `com.apple.*` system groups return `-25300` even when explicitly signed into the entitlement list, and their items are excluded from the dump. The readable total (903 items across 69 groups) therefore differs from the raw database count (1187 genp rows).

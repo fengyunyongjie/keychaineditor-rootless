@@ -8,6 +8,7 @@ func printUsage() -> Never {
     print("  -e     Edit. Requires --account STRING --service STRING [--agroup STRING] --data STRING")
     print("  -d     Delete. Requires --account STRING --service STRING [--agroup STRING]")
     print("  -dg    Delete ALL items in an access group. Requires --agroup STRING --yes. Destructive!")
+    print("  -r     Refresh device keychain entitlements and re-sign this tool.")
     print("NOTES:")
     print(" * Account and Service names are used to uniquely identify a item. An optional AccessGroup can also be passed to identify the item.")
     print(" * If there is no Account name pass an empty string.")
@@ -16,7 +17,8 @@ func printUsage() -> Never {
     print(" * To Dump entire keychain: $ keychaineditor")
     print(" * Limit dump by searching: $ keychaineditor -f 'test'")
     print(" * Edit a keychain item:    $ keychaineditor -e --account 'TestAccount' --service 'TestService' --data 'TestData'")
-    print(" * Delete a keychain item:  $ keychaineditor -d --account 'TestAccount' --service 'TestService'")
+    print(" * Refresh entitlements on-device: $ keychaineditor -r")
+    print(" * Refresh then search: $ keychaineditor -r -f 'io.new.app'")
     exit(EXIT_FAILURE)
 }
 
@@ -89,6 +91,19 @@ func handleDeleteGroup(args: UserDefaults) {
     }
 }
 
+func handleRefresh() {
+    let status = keychain_refresh_current_executable_and_exec(
+        Int32(CommandLine.arguments.count),
+        CommandLine.unsafeArgv
+    )
+    if status != 0 {
+        let message = "KeychainEditor: entitlement refresh failed (errno \(status)). Install ldid with 'apt install ldid' and retry."
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+        exit(EXIT_FAILURE)
+    }
+    print("KeychainEditor: entitlements refreshed.")
+}
+
 /*
   Start of Program.
 */
@@ -98,7 +113,8 @@ guard CommandLine.arguments.count >= 2 else {
 }
 
 switch CommandLine.arguments[1] {
-case "-v": print("KeychainEditor Version = 2.2")
+case "-r": handleRefresh()
+case "-v": print("KeychainEditor Version = 2.3")
 case "-f": handleSearch(args: UserDefaults.standard)
 case "-e": handleEdit(args: UserDefaults.standard)
 case "-d": handleDelete(args: UserDefaults.standard)
